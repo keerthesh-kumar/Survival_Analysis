@@ -1,0 +1,184 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import statistics
+from sklearn.impute import SimpleImputer
+from lifelines import KaplanMeierFitter, CoxPHFitter
+from lifelines.statistics import logrank_test
+from scipy import stats
+
+df = pd.read_csv("lung.csv")
+print(df['sex'].unique())
+print(df.groupby('sex').count())
+
+df.columns
+
+df.info()
+
+df.describe()
+
+# Checking for missing values
+print(df.isnull().sum())
+print(df.shape)
+
+# imputing the missing values with the mean of the column
+imp_mean = SimpleImputer(missing_values = np.nan, strategy = 'mean')
+COLUMNS = ['meal.cal', 'wt.loss']
+X = imp_mean.fit_transform(df[COLUMNS])
+df_X = pd.DataFrame(X,columns = COLUMNS)
+print(df_X.shape)
+print(df_X.isnull().sum())
+print(df_X.shape)
+
+df = df.drop(labels=['meal.cal', 'wt.loss'], axis=1)
+print(df.columns)
+
+df = pd.concat([df, df_X], axis = 1)
+df = df.dropna() 
+print(df.isnull().sum())
+print(df.shape)
+
+sns.pairplot(df)
+
+df.loc[df.status == 1, 'dead'] = 0
+df.loc[df.status == 2, 'dead'] = 1
+print(df.groupby('dead').count())
+print("="*100)
+print(df.columns)
+
+# ## Kaplan Meier Fit
+
+kmf = KaplanMeierFitter()
+T = df['time']
+E = df['dead']
+kmf.fit(T, event_observed = E)
+kmf.plot()
+plt.title("Kaplan Meier estimates")
+plt.xlabel("Days after heart attack")
+plt.ylabel("Survival")
+plt.show()
+
+# we are looking at the median of the survival time
+print("Median Survival Time: ",kmf.median_survival_time_)
+print("="*100)
+print("Event Table: ",kmf.event_table)
+
+# now lets try to predict the survival time
+kmf.predict([100,200,300,400,500])
+
+# saving the survival and confidence interval into a dataframe
+df_survival_time = kmf.survival_function_
+df_confidence_interval = kmf.confidence_interval_
+df_survival_time['survival_timeline'] = kmf.timeline
+
+results = pd.concat([df_survival_time, df_confidence_interval], axis=1)
+
+print(results.head(5))
+
+
+# ### Kaplan Meier Fitter for different Sex groups
+
+sex_group = df['sex']==1
+df_M = df[sex_group]
+print(df_M.shape)
+
+
+# plotting the values for age group above and below 62 years
+ax = plt.subplot(111)
+
+kmf.fit(T[sex_group], event_observed = E[sex_group], label = 'Male')
+kmf.plot(ax = ax)
+
+kmf.fit(T[~sex_group], event_observed = E[~sex_group], label = 'Female')
+kmf.plot(ax = ax)
+
+plt.title("Kaplan Meier estimates by age group")
+plt.xlabel("Days after heart attack")
+plt.ylabel("Survival")
+
+
+# ## Nelson Aalen Hazard Estimator
+
+from lifelines import NelsonAalenFitter
+
+naf = NelsonAalenFitter()
+naf.fit(T, event_observed = E)
+
+naf.plot_cumulative_hazard()
+
+
+# ### Log Rank Test for different Sex Groups
+
+T_male = T[sex_group]
+T_female = T[~sex_group]
+E_male = E[sex_group]
+E_female = E[~sex_group]
+
+results = logrank_test(T_male, T_female, event_observed_A = E_male, event_observed_B = E_female)
+results.print_summary()
+
+
+# ### Cox Ph Fitter for Multiple regression
+
+from lifelines import CoxPHFitter
+
+print(df.columns)
+
+df_ch = df.drop(labels=['Unnamed: 0','status'], axis=1)
+df_ch_arr=np.isinf(df_ch)
+print(df_ch_arr)
+
+print(df_ch.dtypes)
+cph = CoxPHFitter()
+cph.fit(df_ch,"time",event_col="dead")
+cph.print_summary()
+
+
+cph.plot()
+
+
+df_cph_predict = df[['time', 'status', 'age', 'sex', 'ph.ecog',
+       'ph.karno', 'pat.karno', 'meal.cal', 'wt.loss']]
+
+
+df_cph_predict = df_ch.iloc[0:len(df),:]
+df_pred = cph.predict_survival_function(df_cph_predict)
+df_pred['timeline'] = df_pred.index
+df_pred = df_pred.melt(id_vars=['timeline'], var_name='Patient_ID', value_name='Survival_Score')
+
+
+print(df_pred)
+
+
+# ## Plotting the baseline survival for Cox PH Model
+
+
+cph_spline = CoxPHFitter(baseline_estimation_method="spline", n_baseline_knots=5)
+cph_spline.fit(df_ch,"time",event_col="dead")
+base_survival = cph_spline.baseline_survival_at_times()
+base_hazard = cph_spline.baseline_hazard_at_times()
+
+
+baseSurvive = base_survival
+baseSurvive['timeline'] = baseSurvive.index
+print(baseSurvive)
+
+
+# plotting the baseline hazard for Cox PH
+base_survival.plot()
+plt.title("Cox Ph Baseline Survival")
+plt.xlabel("Days after heart attack")
+plt.ylabel("Survival")
+plt.show()
+
+
+# plotting the baseline hazard for Cox PH
+base_hazard.plot()
+plt.title("Cox Ph Hazard")
+plt.xlabel("Days after heart attack")
+plt.ylabel("Hazard")
+plt.show()
